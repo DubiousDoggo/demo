@@ -1,0 +1,1 @@
+.\C64Debugger\C64Debugger.exe -prg %~f1 -symbols %~dpn1.lbl

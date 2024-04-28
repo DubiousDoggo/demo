@@ -1,0 +1,1 @@
+.\vice\bin\x64sc -autostart .\src\test1.prg

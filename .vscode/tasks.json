@@ -1,0 +1,21 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "cl65: build",
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"type": "shell",
+			"command": "./scripts/build.bat",
+			"args": [
+				"./src/test1.asm"
+			],
+			"problemMatcher": [
+				"$ca65",
+				"$ld65",
+			],
+		}
+	]
+}

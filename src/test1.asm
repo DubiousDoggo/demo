@@ -1,16 +1,19 @@
 
 ; == ZEROPAGE ==
-
 FRAME_COUNT     := $02
 
+WIDE_CHAR_BUF   := $03  ; buffer for wide characters in the scroller
 WIGGLE_INDEX    := $04
 
 IRQ_LINE        := $05
-FLD_STALL       := $06
-
+SCROLL_Y        := $06          ; how many lines to stall in scrolled section
+SCROLL_STALL    := $07          ; counter for scroll stall
 SCROLLERX       := $08
-SCROLLERY       := $09
+SCROLL_INDEX    := $09          ; index of scrolled text
 
+STALL_DONE      := $10  ; callback after stall routine
+STALL_DONE_LO   := $10
+STALL_DONE_HI   := $11
 ; == VIC-II ==
 ; https://www.zimmers.net/cbmpics/cbm/c64/vic-ii.txt
 
@@ -50,7 +53,8 @@ VIC_CTRL2       := $D016        ; RES | MCM | CSEL | XSCROLL
                                 ; XSCROLL - 3 bits
 
 VIC_SPR_EXP_Y   := $D017        ; Sprite vertical expand, 1 bit per sprite
-VIC_VIDEO_ADR   := $D018        ; Memory Pointers - remaps where video ram is read from, default is from $0400
+VIC_VIDEO_ADR   := $D018        ; Memory Pointers - high 4 bits remaps where video ram is read from, default is from $0400
+                                ; in text mode: low 4 bits * 1024 is where the character set is read from, lowest bit is always 0
 
 VIC_IRR         := $D019        ; Interrupt request register - clear bit to ack interrupt
                                 ; IRQ | - | - | - | ILP | IMMC | IMBC | IRST
@@ -178,10 +182,15 @@ CIA2_CRA        := $DD0E
 CIA2_CRB        := $DD0F
 
 
+; == CONSTANTS ==
+TOP_SCROLL      := $03  ; scroll value to use for the top 3rd of the screen
+SCROLL_ROW      := 9  ; text row to start scroller at
+SCROLL_ROWS     := $03  ; number of rows in scroll    
 
-; == KERNEL ROUTINES ==
-
-CHROUT := $FFD2
+                ; line to start scroller effect on - must be one line before a badline
+SCROLL_START    := (SCROLL_ROW+6)*8+TOP_SCROLL-1
+SCROLL_MAX      := $18  ; max value the scroll routine expects
+                        ; total lines the scroll takes is SCROLL_ROWS*8+SCROLL_MAX
 
 ; == MACROS ==
 .macro  irq_addr addr
@@ -190,43 +199,50 @@ CHROUT := $FFD2
         lda #>addr
         sta $FFFF
 .endmacro
-.macro  irq_line line
+.macro  irq_line line   ; TODO: this wastes cycles
         lda line        ; interrupt on line
-        sta VIC_RASTER
+        sta VIC_RASTER  ; set IRQ line
         asl VIC_IRR     ; ack IRQ 
 .endmacro
+
+; save registers before irq
 .macro  irq_start
         sta irq_a+1
         stx irq_x+1
         sty irq_y+1
 .endmacro
 
+; mapping for strings to screencodes
+.macro screencode
+    .repeat $20, i
+        .charmap $40 + i, $40 + i + $00
+    .endrepeat
+    .repeat $20, i
+        .charmap $60 + i, $60 + i - $60
+    .endrepeat
+    .repeat $20, i
+        .charmap $80 + i, $80 + i + $40
+    .endrepeat
+    .repeat $20, i
+        .charmap $A0 + i, $A0 + i - $40
+    .endrepeat
+    .repeat $3F, i
+        .charmap $C0 + i, $C0 + i - $80
+    .endrepeat
+    .charmap $FF, $5E
+.endmacro
+
+; create label inside repeat block
+.macro makeident lname, count
+    .ident(.concat(lname,.sprintf("%d", count))):
+.endmacro
+
 ; == ENTRY POINT ==
 
 
-        ; print hello world message
-        ldy #15
-@again: ldx #$00
-@loop:  lda hello,X
-        beq @done 
-        jsr CHROUT
-        inx
-        jmp @loop
-@done:  inc four
-        dey
-        beq init
-        lda #13
-        jsr CHROUT
-        jmp @again
-
-        ; https://www.c64-wiki.com/wiki/Bank_Switching
-      
 init:
         sei             ; disable interrupts
-        
-        lda #%101       ; unmap BASIC and KERNAL, I/O enabled 
-        sta $01
-        
+
         lda #$7F        ; disable CIA interrupts
         sta CIA1_ICR
         sta CIA2_ICR
@@ -234,40 +250,261 @@ init:
         and VIC_CTRL1   ; clear hi bit of RASTER
         sta VIC_CTRL1
 
-        lda VIC_CTRL2   ; set 38 column mode
-        and #%11110111  
-        sta VIC_CTRL2
-
         lda #%0001      ; enable raster interrupts
         sta VIC_IMR
 
-        irq_addr irq1   ; set up IRQ chain
-        irq_line #$00 
+        ; https://www.c64-wiki.com/wiki/Bank_Switching
+        lda #%101       ; unmap BASIC and KERNAL, I/O enabled 
+        sta $01
+
+        lda VIC_CTRL2   ; set 38 column mode
+        and #%11110111  
+        sta VIC_CTRL2
 
         ldx #$02        ; clear zero page
         lda #$00
 @zp:    sta $00,X
         inx
         bne @zp
+        
+        ldy #$08
+@chr_cpy:
+        ldx #$00         ; copy character rom into $2000
+@chr_c: lda font,X
+@chr_s: sta $2000,X
+        inx
+        bne @chr_c
+        inc @chr_c+2
+        inc @chr_s+2
+        dey
+        bne @chr_cpy
 
+        ; select custom character set
+        lda VIC_VIDEO_ADR
+        and #%11110000
+        ora #%00001000
+        sta VIC_VIDEO_ADR
+
+
+        ; print hello world message
+        ldy #41
+@again: ldx #$00
+@loop:  lda hello,X
+        beq @done 
+@base:  sta $0400
+        inc @base+1
+        bne :+
+        inc @base+2
+:       inx
+        jmp @loop
+@done:  inc four
+        dey
+        bne @again
+
+        irq_addr irq1   ; set up IRQ chain
+        irq_line #$00 
         cli             ; enable interrupts
 
 spin:   jmp spin        ; wait for IRQ
         
-
         
+hello:  
+        screencode
+        .byte "hello commodore 6"
+four:   .byte "4!  ",0
 
+        ; == IRQ ==
+
+irq1:   irq_start   
+
+        inc FRAME_COUNT ; update frame count
+        lda FRAME_COUNT
+        and #%111
+        sta SCROLLERX   ; update X scroll
+        bne noshift    ; shift every 8 frames
+
+
+        ; load the next character from the scroller
+.repeat SCROLL_ROWS, r
+makeident "scroll", r
+        ldx #$00
+@scroll_shift:
+        lda $0401+((SCROLL_ROW+r)*40),X
+        sta $0400+((SCROLL_ROW+r)*40),X
+        inx
+        cpx #39
+        bne @scroll_shift
+.endrepeat
+        lda WIDE_CHAR_BUF
+        bne @scroll_write       ; if character was buffered, output it now
+@scroll_load:
+        lda scroll_text         ; operand is incremented as text is loaded
+        bne @scroll_write
+        lda #<scroll_text
+        sta @scroll_load+1
+        lda #>scroll_text
+        sta @scroll_load+2
+        jmp @scroll_load
+@scroll_write:
+        sta $0400+((SCROLL_ROW+1)*40),X ; write the character to the screen
         
+        cmp #$0D ; 'm'          ; check for wide characters
+        beq @wide_boi
+        cmp #$17 ; 'w'
+        beq @wide_boi
+        
+        tay     ; transfer to Y for ascender/descender lookup             
 
-hello:  .byte "          hello commodore 6"
-four:   .byte "4"
-        .byte "!          ",0
+        lda #$00        ; not a wide character, clear buffer
+        sta WIDE_CHAR_BUF 
 
-wiggle_table:
-        .byte $00,$01,$02,$03,$04,$05,$06,$07
-        .byte $06,$05,$04,$03,$02,$01
+        lda font_asc,Y  ; write font ascenders
+        sta $0400+((SCROLL_ROW+0)*40),X
+        lda font_des,Y  ; write font descenders
+        sta $0400+((SCROLL_ROW+2)*40),X
+        
+        inc @scroll_load+1 ; advance to next character
+        bne @scroll_done
+        inc @scroll_load+2
+        jmp @scroll_done
+@wide_boi:      ; we got a wide character, buffer it
+        ora #$40
+        sta WIDE_CHAR_BUF
+@scroll_done:
 
-vert_wiggle_table:
+noshift:
+        ldx WIGGLE_INDEX
+        lda FRAME_COUNT 
+        and #%11        ; update wiggle every 4th frame
+        bne @skipwiggle 
+        cpx #$00
+        bne @dx
+        ldx #14
+@dx:    dex
+        stx WIGGLE_INDEX
+@skipwiggle:
+
+        lda FRAME_COUNT
+        and #%01111111
+        tax
+        lda sine_table,X
+        sta SCROLL_Y 
+        sta SCROLL_STALL  
+
+        lda VIC_CTRL1   ; reset vertical scroll
+        and #%11111000   
+        ora #%00010000 | TOP_SCROLL   ; set BMM, initial scroll
+        sta VIC_CTRL1
+        
+        lda VIC_CTRL2   
+        and #%11111000  ; reset horizontal scroll
+        ora #%00000000  ; set MCM
+        sta VIC_CTRL2
+
+
+        lda #<irq_stall_done_1  ; set callback
+        sta STALL_DONE_LO
+        lda #>irq_stall_done_1
+        sta STALL_DONE_HI
+
+        lda #SCROLL_START       ; IRQ one line before badline, line 7 of row
+        sta IRQ_LINE
+        sta VIC_RASTER  ; set IRQ line
+        irq_addr irq_stall
+        asl VIC_IRR     ; ack IRQ 
+        jmp irq_done
+
+
+        ; IRQ STALL
+        ; ASSUMES:
+        ;       SCROLL_STALL is the number of lines to stall
+        ;       IRQ_LINE is set, and is the line before the next badline
+irq_stall:
+        irq_start
+
+        ; vertical scroll        
+        lda SCROLL_STALL ; number of lines left to stall for from IRQ_LINE
+        cmp #$04        ; less than 4, jump to done phase to set remainder
+        bcc @irq_stall_done   
+        sbc #$04        ; sub 4 from remaining stall time, carry is still set
+        sta SCROLL_STALL
+
+        lda VIC_CTRL1   ; delay upcomming badline by 4 lines
+        and #%11110111  ; prevent overflow into RSEL
+        adc #$03        ; carry is set, this is +4 and clc
+        ora #%00001000  ; re-set RSEL
+        sta VIC_CTRL1
+
+        ; chain irq in 4 lines
+        lda IRQ_LINE       
+        adc #$04        
+        sta IRQ_LINE
+        sta VIC_RASTER  ; set IRQ
+        asl VIC_IRR     ; ack IRQ 
+        jmp irq_done
+
+        ; ASSUMES:  A contains the scroll value to add
+        ;           carry is clear
+@irq_stall_done:       
+        sta @add+1
+        lda VIC_CTRL1  
+        and #%11100111  ; clear scroll and BMM, prevent overflow into RSEL
+@add:   adc #$00        ; set scroll
+        ora #%00001000  ; re-set RSEL
+        sta VIC_CTRL1
+
+        jmp (STALL_DONE)
+
+irq_stall_done_1:       ; called at beginning of scroller
+
+        lda VIC_CTRL2
+        and #%11101000 ; clear MCM
+        ora SCROLLERX  ; set horizontal scroll
+        eor #%00000111
+        sta VIC_CTRL2
+
+        lda #<irq_stall_done_2  ; set callback
+        sta STALL_DONE_LO
+        lda #>irq_stall_done_2
+        sta STALL_DONE_HI
+
+        ; set next IRQ to one line before badline after scrolled rows
+        lda IRQ_LINE    ;
+        clc             ;
+        adc #SCROLL_ROWS*8
+        adc SCROLL_STALL ;
+        sta IRQ_LINE    ;
+        sta VIC_RASTER  ; set IRQ line
+                        ; leave interrupt as irq_stall
+
+        lda #SCROLL_MAX
+        sec
+        sbc SCROLL_Y    ; set stall amount for bottom gap
+        sta SCROLL_STALL  
+
+        asl VIC_IRR     ; ack IRQ 
+        jmp irq_done        
+
+
+irq_stall_done_2:       ; called at end of scroller
+        
+        ; stop scroll horizontal
+        lda VIC_CTRL2
+        and #%11111000
+        sta VIC_CTRL2
+
+        irq_addr irq1   ; chain back to the start
+        irq_line #$00
+
+irq_done:
+irq_a:  lda #$00        ; restore registers and return
+irq_x:  ldx #$00
+irq_y:  ldy #$00
+        rti
+        
+;== TABLES ==
+
+sine_table:     ; sine table - range: [$00,$18]
         .byte $00,$00,$00,$00,$00,$00,$01,$01
         .byte $01,$01,$01,$02,$02,$02,$03,$03
         .byte $04,$04,$04,$05,$05,$06,$06,$07
@@ -285,180 +522,33 @@ vert_wiggle_table:
         .byte $04,$03,$03,$02,$02,$02,$01,$01
         .byte $01,$01,$01,$00,$00,$00,$00,$00
 
-        ; == IRQ ==
-
-irq1:   irq_start   
-
-
-        inc FRAME_COUNT ; update frame count
-        lda FRAME_COUNT
-        and #%111
-        sta SCROLLERX   ; update X scroll
-        
-
-
-        bne @noshift    
-
-        ; TODO: clean this up
-        ldy $0400+(12*40)
-        ldx #$00
-@shift: lda $0401+(12*40),X
-        sta $0400+(12*40),X
-        inx
-        cpx #39
-        bne @shift
-        sty $0400+(12*40)+39
-        
-        ldy $0400+(13*40)
-        ldx #$00
-@shift2:
-        lda $0401+(13*40),X
-        sta $0400+(13*40),X
-        inx
-        cpx #39
-        bne @shift2
-        sty $0400+(13*40)+39
-
-        ldy $0400+(14*40)
-        ldx #$00
-@shift3:
-        lda $0401+(14*40),X
-        sta $0400+(14*40),X
-        inx
-        cpx #39
-        bne @shift3
-        sty $0400+(14*40)+39
-
-@noshift:
-
-        ldx WIGGLE_INDEX
-        lda FRAME_COUNT 
-        and #%11        ; update wiggle every 4th frame
-        bne @skipwiggle 
-        cpx #$00
-        bne @dx
-        ldx #14
-@dx:    dex
-        stx WIGGLE_INDEX
-@skipwiggle:
-
-        lda FRAME_COUNT
-        and #%01111111
-        tax
-        lda vert_wiggle_table,X
-        sta SCROLLERY   ; wiggle the middle of screen
-        sta FLD_STALL
+scroll_text:
+        screencode
+        ; þ ꝥ ð ſ ß
+        .byte "abcdefghijklmnopqrstuvwxyz&",$4F,$53,$55,$49,$4E
+        .byte "whenever i find myself growing grim abou"
+        .byte "t ",$4F,"e mou",$55,"; whenever it is a damp, driz"
+        .byte "zly november in my soul; whenever i find"
+        .byte " myself involuntarily pausing before cof"
+        .byte "fin warehouses, and bringing up ",$4F,"e rear"
+        .byte " of every funeral i meet; & especially"
+        .byte " whenever my hypos get such an upper han"
+        .byte "d of me, ",$53," it requires a strong moral"
+        .byte " principle to prevent me from deliberate"
+        .byte "ly stepping into ",$4F,"e street, and me",$4F,"odi"
+        .byte "cally knocking people's hats off--",$4F,"en, "
+        .byte "i account it high time to get to sea as "
+        .byte "soon as i can. ",$4F,"is is my substitute for"
+        .byte " pistol and ball. wi",$55," a philosophical f"
+        .byte "lourish cato ",$4F,"rows himself upon his swo"
+        .byte "rd; i quietly take to ",$4F,"e ship.        "
+        .repeat $fe, i
+        .byte i+1
+        .endrep
+        .byte 0
 
 
-        lda VIC_CTRL1   ; reset vertical scroll
-        and #%1111000   ; default is 3, but set to 0 to keep it simple for now
-        ora #%0010000   ; set BMM
-        sta VIC_CTRL1
-        
-        lda VIC_CTRL2   
-        and #%11111000  ; reset horizontal scroll
-        ora #%00010000  ; set MCM
-        sta VIC_CTRL2
-        
-        lda #$8F
-        sta IRQ_LINE
-        irq_addr irq_stall
-        irq_line IRQ_LINE
-        jmp irq_done
-
-irq_stall:
-        irq_start
-        ; start of wiggly bit
-
-        ; scroll horizontal
-        lda VIC_CTRL2
-        and #%11101000 ; clear scroll and MCM
-        ora SCROLLERX  ; set scroll
-        eor #%00000111
-        sta VIC_CTRL2
-
-        ; vertical scroll        
-        lda FLD_STALL  ; number of lines to stall for
-        cmp #$07       ; less than 7, set to scroll directly
-        bcc @irq_stall_done   
-        
-        lda VIC_CTRL1  ; otherwise set scroll to 6 to stall
-        and #%1111000
-        ora #%0000110
-        sta VIC_CTRL1
-
-        lda IRQ_LINE   ; and chain irq in 4 lines
-        clc
-        adc #$04
-        sta IRQ_LINE
-        irq_addr @irq_stall_1
-        irq_line IRQ_LINE
-        jmp irq_done
-
-@irq_stall_1:          ; 4 lines later...
-        irq_start
-        
-        lda FLD_STALL
-        cmp #$07       ; equals 7, load it now
-        beq @irq_stall_done   
-
-        sec            ; otherwise it must be 8 or greater
-        sbc #$08       ; stall for the whole row  
-        sta FLD_STALL
-        lda VIC_CTRL1  ; set scroll to 0 to stall
-        and #%1111000
-        sta VIC_CTRL1  
-
-        lda IRQ_LINE   ; and chain irq in 4 lines
-        clc
-        adc #$04
-        sta IRQ_LINE
-        irq_addr irq_stall
-        irq_line IRQ_LINE
-        jmp irq_done     
-
-@irq_stall_done:
-        sta @or+1      ; 
-        lda VIC_CTRL1  
-        and #%1101000  ; clear scroll and BMM
-@or:    ora #$00       ; set scroll
-        sta VIC_CTRL1
-
-        lda IRQ_LINE   ; chain irq at end of wiggly bit
-        clc
-        adc #$18
-        adc FLD_STALL
-        sta IRQ_LINE 
-        irq_addr irq_stall_2
-        irq_line IRQ_LINE
-        jmp irq_done        
-
-irq_stall_2:
-        irq_start
-
-        ; stop scroll horizontal
-        lda VIC_CTRL2
-        and #%11111000
-        sta VIC_CTRL2
-
-        ; resynchronize with scroll offset
-
-        lda VIC_CTRL1   ; reset vertical scroll
-        and #%1111000  
-        
-        sta VIC_CTRL1
-        
+        .include "../fonts/fontmap.inc"
 
 
 
-        irq_addr irq1   ; chain back to the start
-        irq_line #$00
-irq_done:
-irq_a:  lda #$00        ; restore registers and return
-irq_x:  ldx #$00
-irq_y:  ldy #$00
-        rti
-        
-
-
-        

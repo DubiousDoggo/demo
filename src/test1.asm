@@ -14,7 +14,12 @@ SCROLL_INDEX    := $09          ; index of scrolled text
 STALL_DONE      := $10  ; callback after stall routine
 STALL_DONE_LO   := $10
 STALL_DONE_HI   := $11
-; == VIC-II ==
+
+HALF_OFF        := $12 ; is the scroller on a half letter offset
+FREE_CHAR       := $13 ; current open free character
+TEMP            := $14
+
+; == VIC-II ==1
 ; https://www.zimmers.net/cbmpics/cbm/c64/vic-ii.txt
 
 VIC_SPR0_X      := $D000        ; sprite X and Y positions
@@ -192,6 +197,8 @@ SCROLL_START    := (SCROLL_ROW+6)*8+TOP_SCROLL-1
 SCROLL_MAX      := $18  ; max value the scroll routine expects
                         ; total lines the scroll takes is SCROLL_ROWS*8+SCROLL_MAX
 
+FREE_CHARS      := $E0  ; start of ligature storage
+
 ; == MACROS ==
 .macro  irq_addr addr
         lda #<addr      ; set IRQ vector
@@ -205,6 +212,14 @@ SCROLL_MAX      := $18  ; max value the scroll routine expects
         asl VIC_IRR     ; ack IRQ 
 .endmacro
 
+; 16 bit increment operand
+.macro  i16 p         
+        inc p+1
+        bne :+
+        inc p+2
+:
+.endmacro
+
 ; save registers before irq
 .macro  irq_start
         sta irq_a+1
@@ -212,30 +227,12 @@ SCROLL_MAX      := $18  ; max value the scroll routine expects
         sty irq_y+1
 .endmacro
 
-; mapping for strings to screencodes
-.macro screencode
-    .repeat $20, i
-        .charmap $40 + i, $40 + i + $00
-    .endrepeat
-    .repeat $20, i
-        .charmap $60 + i, $60 + i - $60
-    .endrepeat
-    .repeat $20, i
-        .charmap $80 + i, $80 + i + $40
-    .endrepeat
-    .repeat $20, i
-        .charmap $A0 + i, $A0 + i - $40
-    .endrepeat
-    .repeat $3F, i
-        .charmap $C0 + i, $C0 + i - $80
-    .endrepeat
-    .charmap $FF, $5E
-.endmacro
-
 ; create label inside repeat block
 .macro makeident lname, count
     .ident(.concat(lname,.sprintf("%d", count))):
 .endmacro
+
+.include "font_map.inc"
 
 ; == ENTRY POINT ==
 
@@ -279,6 +276,9 @@ init:
         dey
         bne @chr_cpy
 
+        lda #FREE_CHARS
+        sta FREE_CHAR
+
         ; select custom character set
         lda VIC_VIDEO_ADR
         and #%11110000
@@ -292,13 +292,10 @@ init:
 @loop:  lda hello,X
         beq @done 
 @base:  sta $0400
-        inc @base+1
-        bne :+
-        inc @base+2
-:       inx
+        i16 @base
+        inx
         jmp @loop
-@done:  inc four
-        dey
+@done:  dey
         bne @again
 
         irq_addr irq1   ; set up IRQ chain
@@ -309,7 +306,6 @@ spin:   jmp spin        ; wait for IRQ
         
         
 hello:  
-        screencode
         .byte "hello commodore 6"
 four:   .byte "4!  ",0
 
@@ -321,12 +317,13 @@ irq1:   irq_start
         lda FRAME_COUNT
         and #%111
         sta SCROLLERX   ; update X scroll
-        bne noshift    ; shift every 8 frames
+        beq shift       ; shift every 8 frames
+        jmp noshift     ; long jump
+shift:
 
 
-        ; load the next character from the scroller
-.repeat SCROLL_ROWS, r
-makeident "scroll", r
+.repeat SCROLL_ROWS, r  ; copy the scroller region over one char
+makeident "scroll", r   ; prevent local label conflict
         ldx #$00
 @scroll_shift:
         lda $0401+((SCROLL_ROW+r)*40),X
@@ -335,42 +332,147 @@ makeident "scroll", r
         cpx #39
         bne @scroll_shift
 .endrepeat
-        lda WIDE_CHAR_BUF
-        bne @scroll_write       ; if character was buffered, output it now
-@scroll_load:
-        lda scroll_text         ; operand is incremented as text is loaded
-        bne @scroll_write
-        lda #<scroll_text
-        sta @scroll_load+1
-        lda #>scroll_text
-        sta @scroll_load+2
-        jmp @scroll_load
-@scroll_write:
-        sta $0400+((SCROLL_ROW+1)*40),X ; write the character to the screen
-        
-        cmp #$0D ; 'm'          ; check for wide characters
-        beq @wide_boi
-        cmp #$17 ; 'w'
-        beq @wide_boi
-        
-        tay     ; transfer to Y for ascender/descender lookup             
 
-        lda #$00        ; not a wide character, clear buffer
-        sta WIDE_CHAR_BUF 
+        lda WIDE_CHAR_BUF       ; if character was buffered, output it
+        bne scroll_write       
+
+        jsr load_char
+        jmp scroll_write
+
+load_char:
+@p_scr: lda scroll_text         ; load the next character 
+        beq @scroll_reset       ; hit null terminator
+        i16 @p_scr              ; advance to next char
+        rts
+@scroll_reset:
+        lda #<scroll_text       ; if we hit the end of the scroll text reset
+        sta @p_scr+1            ; to the start of the buffer
+        lda #>scroll_text
+        sta @p_scr+2
+        jmp load_char
+
+
+scroll_write:           ; write the character in A to the screen
+        tay             ; save character to to Y for lookup             
+        lda #$00
+        sta WIDE_CHAR_BUF
+
+        ; check for half chars
+        cpy #FREE_CHARS
+        bcs @narrow
+        cpy #'i'
+        beq @narrow
+        cpy #'l'
+        beq @narrow
+        cpy #'w'+1
+        beq @narrow
+        jmp @not_narrow
+
+@narrow:
+
+        tya
+        ; copy 8 bytes from $2000+(A*8) | $2000+(NEXT*8) >> 4 to $2000+(FREE_CHAR*8)
+        ; $2000+(A*8) = $2000+(A<<3) = ($0400+A)<<3
+        ldx #$04
+        stx @from1+2
+        stx @from2+2
+        stx @to+2
+
+        .repeat 3
+        asl
+        rol @from1+2
+        .endrepeat
+        sta @from1+1
+
+        lda FREE_CHAR
+        tay             ; set character to write
+        .repeat 3
+        asl
+        rol @to+2
+        .endrepeat
+        sta @to+1
+        
+        lda @to+1       ; store half of next char into next tile
+        
+        lda @to+2
+        sta @to2+2
+        
+        lda @to+1
+        clc
+        adc #$08
+        sta @to2+1
+        bcc :+
+        inc @to2+2
+:
+        inc FREE_CHAR
+        ldx FREE_CHAR
+        bne :+
+        ldx #FREE_CHARS
+        stx FREE_CHAR
+:       
+        jsr load_char
+
+        cmp #'i'        ; if a narrow char is on the second half of tile, dont buffer the next char half
+        beq @stop_half
+        cmp #'l'
+        beq @stop_half
+        stx WIDE_CHAR_BUF 
+@stop_half:
+
+        .repeat 3
+        asl
+        rol @from2+2
+        .endrepeat
+        sta @from2+1
+
+        ldx #7
+@copy:  
+@from2: lda $2000,X ; second half of tile
+        .repeat 4
+        lsr
+        ror TEMP
+        .endrepeat
+@from1: ora $2000,X
+@to:    sta $2000,X
+        lda TEMP
+        and #$F0
+@to2:   sta $2000,X
+        dex
+        bpl @copy
+
+
+@not_narrow:
+        tya 
+
+        sta $0400+((SCROLL_ROW+1)*40)+39
+
+        cmp #'m'  ; check for wide characters to buffer
+        beq @wide_boi
+        cmp #'w'
+        beq @wide_boi
+        cmp #'-'  
+        beq @wide_boi
+        jmp @not_wide
+@wide_boi:      
+        clc
+        adc #$01  ; second half follows in char mem
+        sta WIDE_CHAR_BUF
+@not_wide:
 
         lda font_asc,Y  ; write font ascenders
-        sta $0400+((SCROLL_ROW+0)*40),X
+        sta $0400+((SCROLL_ROW+0)*40)+39
         lda font_des,Y  ; write font descenders
-        sta $0400+((SCROLL_ROW+2)*40),X
+        sta $0400+((SCROLL_ROW+2)*40)+39
+
+        ; handle fancy y descender
+        cpy #'y' ; 'y'
+        bne @not_y
+        lda # ('y'+32-2)
+        sta $0400+((SCROLL_ROW+2)*40)+39-2
+        lda # ('y'+32-1)
+        sta $0400+((SCROLL_ROW+2)*40)+39-1
         
-        inc @scroll_load+1 ; advance to next character
-        bne @scroll_done
-        inc @scroll_load+2
-        jmp @scroll_done
-@wide_boi:      ; we got a wide character, buffer it
-        ora #$40
-        sta WIDE_CHAR_BUF
-@scroll_done:
+@not_y:
 
 noshift:
         ldx WIGGLE_INDEX
@@ -523,32 +625,26 @@ sine_table:     ; sine table - range: [$00,$18]
         .byte $01,$01,$01,$00,$00,$00,$00,$00
 
 scroll_text:
-        screencode
-        ; Ã¾ ê¥ Ã° Å¿ ÃŸ
-        .byte "abcdefghijklmnopqrstuvwxyz&",$4F,$53,$55,$49,$4E
         .byte "whenever i find myself growing grim abou"
-        .byte "t ",$4F,"e mou",$55,"; whenever it is a damp, driz"
+        .byte "t þe mouð; whenever it is a damp, driz"
         .byte "zly november in my soul; whenever i find"
         .byte " myself involuntarily pausing before cof"
-        .byte "fin warehouses, and bringing up ",$4F,"e rear"
+        .byte "fin warehouses, & bringing up þe rear"
         .byte " of every funeral i meet; & especially"
         .byte " whenever my hypos get such an upper han"
-        .byte "d of me, ",$53," it requires a strong moral"
+        .byte "d of me, @ it requires a strong moral"
         .byte " principle to prevent me from deliberate"
-        .byte "ly stepping into ",$4F,"e street, and me",$4F,"odi"
-        .byte "cally knocking people's hats off--",$4F,"en, "
+        .byte "ly stepping into þe street, & meþodi"
+        .byte "cally knocking people's hats off-þen, "
         .byte "i account it high time to get to sea as "
-        .byte "soon as i can. ",$4F,"is is my substitute for"
-        .byte " pistol and ball. wi",$55," a philosophical f"
-        .byte "lourish cato ",$4F,"rows himself upon his swo"
-        .byte "rd; i quietly take to ",$4F,"e ship.        "
-        .repeat $fe, i
-        .byte i+1
-        .endrep
-        .byte 0
+        .byte "soon as i can. þis is my substitute for "
+        .byte "pistol & ball. wið a philosophical "
+        .byte "flourish cato þrows himself upon his sword;"
+        .byte "i quietly take to þe ship.     "
+        .byte $00
 
 
-        .include "../fonts/fontmap.inc"
+        .include "./font.inc"
 
 
 

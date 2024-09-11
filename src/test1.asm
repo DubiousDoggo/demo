@@ -15,9 +15,25 @@ STALL_DONE      := $10  ; callback after stall routine
 STALL_DONE_LO   := $10
 STALL_DONE_HI   := $11
 
-HALF_OFF        := $12 ; is the scroller on a half letter offset
-FREE_CHAR       := $13 ; current open free character
+PREV_CHAR       := $12  ; previous character in scroller
+
+TEMP2           := $13
 TEMP            := $14
+
+FNT_P           := $15
+FNT_P_LO        := $15
+FNT_P_HI        := $16
+
+FNT_P_TILE      := $17
+FNT_P_SHIFT     := $18
+
+COL_PTR         := $20
+COL_PTR_LO      := $20
+COL_PTR_HI      := $21
+
+TEXT_CTR        := $22
+
+COL_BUF       := $0200
 
 ; == VIC-II ==1
 ; https://www.zimmers.net/cbmpics/cbm/c64/vic-ii.txt
@@ -190,14 +206,16 @@ CIA2_CRB        := $DD0F
 ; == CONSTANTS ==
 TOP_SCROLL      := $03  ; scroll value to use for the top 3rd of the screen
 SCROLL_ROW      := 9  ; text row to start scroller at
-SCROLL_ROWS     := $03  ; number of rows in scroll    
+FONT_HEIGHT     := $03  ; number of rows in scroll    
+
+COL_ROLLOVER    := 50 ; text column to roll over font buffer at
+
+COL_HEIGHT      := FONT_HEIGHT * 8
 
                 ; line to start scroller effect on - must be one line before a badline
 SCROLL_START    := (SCROLL_ROW+6)*8+TOP_SCROLL-1
 SCROLL_MAX      := $18  ; max value the scroll routine expects
-                        ; total lines the scroll takes is SCROLL_ROWS*8+SCROLL_MAX
-
-FREE_CHARS      := $E0  ; start of ligature storage
+                        ; total lines the scroll takes is FONT_HEIGHT*8+SCROLL_MAX
 
 ; == MACROS ==
 .macro  irq_addr addr
@@ -232,8 +250,6 @@ FREE_CHARS      := $E0  ; start of ligature storage
     .ident(.concat(lname,.sprintf("%d", count))):
 .endmacro
 
-.include "font_map.inc"
-
 ; == ENTRY POINT ==
 
 
@@ -263,23 +279,33 @@ init:
 @zp:    sta $00,X
         inx
         bne @zp
-        
+
+
+;         ldy #$08
+; @chr_cpy:
+;         ldx #$00         ; copy character rom into $2000
+; @chr_c: lda font,X
+; @chr_s: sta $2000,X
+;         inx
+;         bne @chr_c
+;         inc @chr_c+2
+;         inc @chr_s+2
+;         dey
+;         bne @chr_cpy
+
+        ; clear character page
         ldy #$08
-@chr_cpy:
-        ldx #$00         ; copy character rom into $2000
-@chr_c: lda font,X
+@chr_clr:
+        ldx #$00  
 @chr_s: sta $2000,X
         inx
-        bne @chr_c
-        inc @chr_c+2
+        bne @chr_s
         inc @chr_s+2
         dey
-        bne @chr_cpy
+        bne @chr_clr
 
-        lda #FREE_CHARS
-        sta FREE_CHAR
 
-        ; select custom character set
+        ;  select custom character set
         lda VIC_VIDEO_ADR
         and #%11110000
         ora #%00001000
@@ -287,24 +313,201 @@ init:
 
 
         ; print hello world message
-        ldy #41
-@again: ldx #$00
-@loop:  lda hello,X
-        beq @done 
-@base:  sta $0400
-        i16 @base
-        inx
-        jmp @loop
-@done:  dey
-        bne @again
+;         ldy #41
+; @again: ldx #$00
+; @loop:  lda hello,X
+;         beq @done 
+; @base:  sta $0400
+;         i16 @base
+;         inx
+;         jmp @loop
+; @done:  dey
+;         bne @again
+
+        ; print scroller pattern
+        ldy #39
+        lda #FONT_HEIGHT*40-1
+        sec
+@pat:   .repeat FONT_HEIGHT, i
+        sta $0400+40*(SCROLL_ROW+FONT_HEIGHT-1-i),Y
+        sbc #$01
+        .endrepeat
+        dey
+        bpl @pat
+
+        ; text start column
+        lda #$10
+        sta FNT_P_LO
+        lda #$00
+        sta FNT_P_HI
+
 
         irq_addr irq1   ; set up IRQ chain
         irq_line #$00 
         cli             ; enable interrupts
 
-spin:   jmp spin        ; wait for IRQ
+spin:   lda TEXT_CTR    ; wait for IRQ
+        beq spin
+        dec TEXT_CTR
+        jsr load_text
+        jmp spin
+
+load_text:
+        jsr load_char
+        tay
+        jsr place_char
+        rts
+
+load_char:
+@p_scr: lda scroll_text         ; load the next character 
+        cmp #$FF
+        beq @scroll_reset       ; hit terminator
+        i16 @p_scr              ; advance to next char
+        rts
+@scroll_reset:
+        lda #<scroll_text       ; if we hit the end of the scroll text reset
+        sta @p_scr+1            ; to the start of the buffer
+        lda #>scroll_text
+        sta @p_scr+2
+        jmp load_char
+
+
+place_char:   ; write the character in Y to the screen
+              ; FNT_P is the pixel column of PREV_CHAR 
+
+        lda font_lo,Y     ; set up character data pointer
+        sta @cdp+1
+        lda font_hi,Y
+        sta @cdp+2
+
+        lda #$00
+        ldx #COL_HEIGHT-1 ; clear col buf
+:       sta COL_BUF,X
+        dex
+        bpl :-
+
+        ; calculate kerning
+        clc
+        ldx PREV_CHAR   ; fnt_p += kern[prev_char][y]
+        lda kern_lo,X
+        sta @kern+1
+        lda kern_hi,X
+        sta @kern+2     
+@kern:  lda $FFFF,Y     
+        bmi @neg
+        adc FNT_P_LO
+        sta FNT_P_LO
+        bcc @kd
+        inc FNT_P_HI
+        jmp @kd
+@neg:   adc FNT_P_LO
+        sta FNT_P_LO
+        bcs @kd
+        dec FNT_P_HI
+@kd:    sty PREV_CHAR
+
+        lda FNT_P_HI    ; fnt_p %= 8*COL_ROLLOVER
+        cmp #>(COL_ROLLOVER*8)
+        bcc @noroll
+        lda FNT_P_LO
+        cmp #<(COL_ROLLOVER*8)
+        bcc @noroll
+        sbc #<(COL_ROLLOVER*8)
+        sta FNT_P_LO
+        lda FNT_P_HI
+        sbc #>(COL_ROLLOVER*8)
+        sta FNT_P_HI
+@noroll:
+
+        ; calculate column pointer and shift amount
+
+        lda FNT_P_LO   ; FNT_P_SHIFT = FNT_P % 8
+        and #%00000111
+        sta FNT_P_SHIFT
+
+        lda FNT_P_LO   ; col_ptr = (fnt_p & ~%111) * 3
+        and #%11111000
+        sta COL_PTR_LO
+        lda FNT_P_HI     
+        sta COL_PTR_HI
+        lda COL_PTR_LO
+        asl
+        rol COL_PTR_HI
+        clc
+        adc COL_PTR_LO
+        sta COL_PTR_LO
+        bcc :+
+        inc COL_PTR_HI
+        clc
+:       lda FNT_P_HI
+        adc COL_PTR_HI
+        sta COL_PTR_HI
         
+        lda COL_PTR_HI  ; col_ptr |= $2000 (start of char page)
+        ora #$20
+        sta COL_PTR_HI
+
+        ldx font_columns,Y
+@col_loop:
+        stx TEMP
+
+        ldy #COL_HEIGHT-1
+@do_buf:
+
+        lda (COL_PTR),Y ; or in remainder of previous shift
+        ora COL_BUF,Y
+        sta (COL_PTR),Y
+
+@cdp:   lda $FFFF,Y     ; load in character data
+        sta TEMP2
+
+        lda #$00        ; split character data across TEMP2 and COL_BUF by p_shift
+        ldx FNT_P_SHIFT
+        jmp @e
+@shift: lsr TEMP2
+        ror A
+        dex
+@e:     bne @shift
+        sta COL_BUF,Y
+
+        lda (COL_PTR),Y  ; or in shifted result
+        ora TEMP2
+        sta (COL_PTR),Y
+
+        dey
+        bpl @do_buf
+
+        clc             ; increment character data pointer to next column
+        lda @cdp+1
+        adc #COL_HEIGHT
+        sta @cdp+1
+        bcc :+
+        inc @cdp+2
+        clc
+:
+        lda COL_PTR_LO   ; increment column pointer to next column
+        adc #COL_HEIGHT
+        sta COL_PTR_LO
+        bcc :+
+        inc COL_PTR_HI
+:
+        ldx TEMP
+        dex
+        bne @col_loop
         
+
+        ldy #COL_HEIGHT-1
+@last_col:
+        lda (COL_PTR),Y  ; or in remainder of previous shift
+        ora COL_BUF,Y
+        sta (COL_PTR),Y
+        dey
+        bpl @last_col
+
+        rts
+
+
+
 hello:  
         .byte "hello commodore 6"
 four:   .byte "4!  ",0
@@ -317,162 +520,20 @@ irq1:   irq_start
         lda FRAME_COUNT
         and #%111
         sta SCROLLERX   ; update X scroll
-        beq shift       ; shift every 8 frames
-        jmp noshift     ; long jump
-shift:
-
-
-.repeat SCROLL_ROWS, r  ; copy the scroller region over one char
-makeident "scroll", r   ; prevent local label conflict
-        ldx #$00
+        bne noshift     ; shift every 8 frames     
+        
+shift:  ; increment scrolling region tiles
+        ldx #FONT_HEIGHT*40-1
 @scroll_shift:
-        lda $0401+((SCROLL_ROW+r)*40),X
-        sta $0400+((SCROLL_ROW+r)*40),X
-        inx
-        cpx #39
-        bne @scroll_shift
-.endrepeat
-
-        lda WIDE_CHAR_BUF       ; if character was buffered, output it
-        bne scroll_write       
-
-        jsr load_char
-        jmp scroll_write
-
-load_char:
-@p_scr: lda scroll_text         ; load the next character 
-        beq @scroll_reset       ; hit null terminator
-        i16 @p_scr              ; advance to next char
-        rts
-@scroll_reset:
-        lda #<scroll_text       ; if we hit the end of the scroll text reset
-        sta @p_scr+1            ; to the start of the buffer
-        lda #>scroll_text
-        sta @p_scr+2
-        jmp load_char
-
-
-scroll_write:           ; write the character in A to the screen
-        tay             ; save character to to Y for lookup             
-        lda #$00
-        sta WIDE_CHAR_BUF
-
-        ; check for half chars
-        cpy #FREE_CHARS
-        bcs @narrow
-        cpy #'i'
-        beq @narrow
-        cpy #'l'
-        beq @narrow
-        cpy #'w'+1
-        beq @narrow
-        jmp @not_narrow
-
-@narrow:
-
-        tya
-        ; copy 8 bytes from $2000+(A*8) | $2000+(NEXT*8) >> 4 to $2000+(FREE_CHAR*8)
-        ; $2000+(A*8) = $2000+(A<<3) = ($0400+A)<<3
-        ldx #$04
-        stx @from1+2
-        stx @from2+2
-        stx @to+2
-
-        .repeat 3
-        asl
-        rol @from1+2
-        .endrepeat
-        sta @from1+1
-
-        lda FREE_CHAR
-        tay             ; set character to write
-        .repeat 3
-        asl
-        rol @to+2
-        .endrepeat
-        sta @to+1
-        
-        lda @to+1       ; store half of next char into next tile
-        
-        lda @to+2
-        sta @to2+2
-        
-        lda @to+1
+        lda $0400+40*SCROLL_ROW,X
         clc
-        adc #$08
-        sta @to2+1
+        adc #FONT_HEIGHT
+        cmp #FONT_HEIGHT*COL_ROLLOVER
         bcc :+
-        inc @to2+2
-:
-        inc FREE_CHAR
-        ldx FREE_CHAR
-        bne :+
-        ldx #FREE_CHARS
-        stx FREE_CHAR
-:       
-        jsr load_char
-
-        cmp #'i'        ; if a narrow char is on the second half of tile, dont buffer the next char half
-        beq @stop_half
-        cmp #'l'
-        beq @stop_half
-        stx WIDE_CHAR_BUF 
-@stop_half:
-
-        .repeat 3
-        asl
-        rol @from2+2
-        .endrepeat
-        sta @from2+1
-
-        ldx #7
-@copy:  
-@from2: lda $2000,X ; second half of tile
-        .repeat 4
-        lsr
-        ror TEMP
-        .endrepeat
-@from1: ora $2000,X
-@to:    sta $2000,X
-        lda TEMP
-        and #$F0
-@to2:   sta $2000,X
+        sbc #FONT_HEIGHT*COL_ROLLOVER
+:       sta $0400+40*SCROLL_ROW,X
         dex
-        bpl @copy
-
-
-@not_narrow:
-        tya 
-
-        sta $0400+((SCROLL_ROW+1)*40)+39
-
-        cmp #'m'  ; check for wide characters to buffer
-        beq @wide_boi
-        cmp #'w'
-        beq @wide_boi
-        cmp #'-'  
-        beq @wide_boi
-        jmp @not_wide
-@wide_boi:      
-        clc
-        adc #$01  ; second half follows in char mem
-        sta WIDE_CHAR_BUF
-@not_wide:
-
-        lda font_asc,Y  ; write font ascenders
-        sta $0400+((SCROLL_ROW+0)*40)+39
-        lda font_des,Y  ; write font descenders
-        sta $0400+((SCROLL_ROW+2)*40)+39
-
-        ; handle fancy y descender
-        cpy #'y' ; 'y'
-        bne @not_y
-        lda # ('y'+32-2)
-        sta $0400+((SCROLL_ROW+2)*40)+39-2
-        lda # ('y'+32-1)
-        sta $0400+((SCROLL_ROW+2)*40)+39-1
-        
-@not_y:
+        bpl @scroll_shift
 
 noshift:
         ldx WIGGLE_INDEX
@@ -484,6 +545,10 @@ noshift:
         ldx #14
 @dx:    dex
         stx WIGGLE_INDEX
+
+
+        inc TEXT_CTR
+
 @skipwiggle:
 
         lda FRAME_COUNT
@@ -573,7 +638,7 @@ irq_stall_done_1:       ; called at beginning of scroller
         ; set next IRQ to one line before badline after scrolled rows
         lda IRQ_LINE    ;
         clc             ;
-        adc #SCROLL_ROWS*8
+        adc #FONT_HEIGHT*8
         adc SCROLL_STALL ;
         sta IRQ_LINE    ;
         sta VIC_RASTER  ; set IRQ line
@@ -624,27 +689,34 @@ sine_table:     ; sine table - range: [$00,$18]
         .byte $04,$03,$03,$02,$02,$02,$01,$01
         .byte $01,$01,$01,$00,$00,$00,$00,$00
 
+        .include "./font_map.inc"
+
+
+; scroll_text:
+;         .byte "yyyyyyyyy"
+;         .byte $FF
+
 scroll_text:
         .byte "whenever i find myself growing grim abou"
-        .byte "t þe mouð; whenever it is a damp, driz"
+        .byte "t the mouth; whenever it is a damp, driz"
         .byte "zly november in my soul; whenever i find"
         .byte " myself involuntarily pausing before cof"
-        .byte "fin warehouses, & bringing up þe rear"
+        .byte "fin warehouses, & bringing up the rear"
         .byte " of every funeral i meet; & especially"
         .byte " whenever my hypos get such an upper han"
-        .byte "d of me, @ it requires a strong moral"
+        .byte "d of me, that it requires a strong moral"
         .byte " principle to prevent me from deliberate"
-        .byte "ly stepping into þe street, & meþodi"
-        .byte "cally knocking people's hats off-þen, "
+        .byte "ly stepping into the street, & methodi"
+        .byte "cally knocking people's hats off-then, "
         .byte "i account it high time to get to sea as "
-        .byte "soon as i can. þis is my substitute for "
-        .byte "pistol & ball. wið a philosophical "
-        .byte "flourish cato þrows himself upon his sword;"
-        .byte "i quietly take to þe ship.     "
-        .byte $00
-
+        .byte "soon as i can. this is my substitute for "
+        .byte "pistol & ball. with a philosophical "
+        .byte "flourish cato throws himself upon his sword;"
+        .byte "i quietly take to the ship.     "
+        .byte $FF
 
         .include "./font.inc"
+
 
 
 

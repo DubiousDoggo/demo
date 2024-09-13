@@ -3,3 +3,8 @@ videos/
 saves/
 cc65/
 C64Debugger/
+*.c
+*.zip
+bin/*
+fonts/*.psd
+fonts/*.act

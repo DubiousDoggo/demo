@@ -133,8 +133,4 @@ with open(out_dir+"font_map.inc", "w", encoding="utf-8") as ofile:
     for i, ch in enumerate(chars.keys()):
         print(f".charmap ${ord(ch):02x}, ${i:02x} ; {ch}", file=ofile)
 
-time.sleep(2)
-
-
-for char in chars.keys():
-    print("\t.byte \"" + "".join(char + c for c in chars.keys()) + '"')
+time.sleep(2) # don't know what this is waiting for, but build breaks sometimes without it

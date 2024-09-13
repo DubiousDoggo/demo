@@ -1,1 +1,1 @@
-.\vice\bin\x64sc -autostart .\src\test1.prg
+.\vice\bin\x64sc -autostart .\bin\test1.prg

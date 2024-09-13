@@ -32,6 +32,7 @@ COL_PTR_LO      := $20
 COL_PTR_HI      := $21
 
 TEXT_CTR        := $22
+ERASE_CTR       := $23
 
 COL_BUF       := $0200
 
@@ -205,17 +206,19 @@ CIA2_CRB        := $DD0F
 
 ; == CONSTANTS ==
 TOP_SCROLL      := $03  ; scroll value to use for the top 3rd of the screen
-SCROLL_ROW      := 9  ; text row to start scroller at
-FONT_HEIGHT     := $03  ; number of rows in scroll    
+SCROLL_ROW      := 9    ; text row to start scroller at
+FONT_HEIGHT     := $03  ; number of rows in scroller    
 
-COL_ROLLOVER    := 50 ; text column to roll over font buffer at
+TEXT_START_POS  := 40*8 ; pixel column to load in text at
+COL_ROLLOVER    := 50   ; text column to roll over font buffer at
 
-COL_HEIGHT      := FONT_HEIGHT * 8
+COL_HEIGHT      := FONT_HEIGHT * 8 ; pixel height of font
 
                 ; line to start scroller effect on - must be one line before a badline
 SCROLL_START    := (SCROLL_ROW+6)*8+TOP_SCROLL-1
 SCROLL_MAX      := $18  ; max value the scroll routine expects
                         ; total lines the scroll takes is FONT_HEIGHT*8+SCROLL_MAX
+
 
 ; == MACROS ==
 .macro  irq_addr addr
@@ -281,10 +284,12 @@ init:
         bne @zp
 
 
+;         lda #%001       ; unmap BASIC and KERNAL, CHAR ROM enabled
+;         sta $01
 ;         ldy #$08
 ; @chr_cpy:
 ;         ldx #$00         ; copy character rom into $2000
-; @chr_c: lda font,X
+; @chr_c: lda $D000,X
 ; @chr_s: sta $2000,X
 ;         inx
 ;         bne @chr_c
@@ -292,6 +297,8 @@ init:
 ;         inc @chr_s+2
 ;         dey
 ;         bne @chr_cpy
+;         lda #%101       ; unmap BASIC and KERNAL, I/O enabled 
+;         sta $01
 
         ; clear character page
         ldy #$08
@@ -324,6 +331,18 @@ init:
 ; @done:  dey
 ;         bne @again
 
+        ; clear screen
+        lda #$ff
+        ldy #$04
+@again: ldx #$00 
+@base:  sta $0400
+        i16 @base
+        inx
+        bne @base
+@done:  dey
+        bne @again
+
+
         ; print scroller pattern
         ldy #39
         lda #FONT_HEIGHT*40-1
@@ -336,20 +355,58 @@ init:
         bpl @pat
 
         ; text start column
-        lda #$10
+        lda #<TEXT_START_POS
         sta FNT_P_LO
-        lda #$00
+        lda #>TEXT_START_POS
         sta FNT_P_HI
+
+        ; initial width of characters to load
+        lda #$fb ; -5
+        sta TEXT_CTR
+
+        ; track where the left edge of the scroll region is
+        lda #$00
+        sta ERASE_CTR
 
 
         irq_addr irq1   ; set up IRQ chain
         irq_line #$00 
         cli             ; enable interrupts
 
-spin:   lda TEXT_CTR    ; wait for IRQ
-        beq spin
-        dec TEXT_CTR
+spin:   lda TEXT_CTR    ; wait for signal to load more text
+        bpl @clear
         jsr load_text
+
+@clear: lda ERASE_CTR
+        beq spin
+        dec ERASE_CTR
+
+        ; erase the column that scrolled off
+        lda #$00
+        ldx #COL_HEIGHT-1
+@erase: sta $2000,X
+        dex
+        bpl @erase
+        
+        ; inc erase pointer
+        clc
+        lda @erase+1
+        adc #COL_HEIGHT
+        sta @erase+1
+        bcc :+
+        inc @erase+2
+:
+        lda @erase+2  ; check for roll over 
+        cmp #>($2000 + (COL_HEIGHT*COL_ROLLOVER))
+        bne :+
+        lda @erase+1
+        cmp #<($2000 + (COL_HEIGHT*COL_ROLLOVER))
+        bcc :+
+        lda #$20
+        sta @erase+2
+        lda #$00
+        sta @erase+1
+:
         jmp spin
 
 load_text:
@@ -387,13 +444,15 @@ place_char:   ; write the character in Y to the screen
         bpl :-
 
         ; calculate kerning
+        ; fnt_p += kern[prev_char][y]
         clc
-        ldx PREV_CHAR   ; fnt_p += kern[prev_char][y]
+        ldx PREV_CHAR  
         lda kern_lo,X
         sta @kern+1
         lda kern_hi,X
         sta @kern+2     
-@kern:  lda $FFFF,Y     
+@kern:  lda $FFFF,Y   ; A = kern[prev_char][y]
+        sta TEMP
         bmi @neg
         adc FNT_P_LO
         sta FNT_P_LO
@@ -405,6 +464,11 @@ place_char:   ; write the character in Y to the screen
         bcs @kd
         dec FNT_P_HI
 @kd:    sty PREV_CHAR
+
+        clc
+        lda TEXT_CTR
+        adc TEMP
+        sta TEXT_CTR
 
         lda FNT_P_HI    ; fnt_p %= 8*COL_ROLLOVER
         cmp #>(COL_ROLLOVER*8)
@@ -486,10 +550,21 @@ place_char:   ; write the character in Y to the screen
         clc
 :
         lda COL_PTR_LO   ; increment column pointer to next column
-        adc #COL_HEIGHT
-        sta COL_PTR_LO
+        adc #COL_HEIGHT 
+        sta COL_PTR_LO   
         bcc :+
         inc COL_PTR_HI
+:
+        lda COL_PTR_HI  ; check for roll over 
+        cmp #>($2000 + (COL_HEIGHT*COL_ROLLOVER))
+        bne :+
+        lda COL_PTR_LO
+        cmp #<($2000 + (COL_HEIGHT*COL_ROLLOVER))
+        bcc :+
+        lda #$00
+        sta COL_PTR_LO
+        lda #$20
+        sta COL_PTR_HI
 :
         ldx TEMP
         dex
@@ -507,11 +582,6 @@ place_char:   ; write the character in Y to the screen
         rts
 
 
-
-hello:  
-        .byte "hello commodore 6"
-four:   .byte "4!  ",0
-
         ; == IRQ ==
 
 irq1:   irq_start   
@@ -522,7 +592,7 @@ irq1:   irq_start
         sta SCROLLERX   ; update X scroll
         bne noshift     ; shift every 8 frames     
         
-shift:  ; increment scrolling region tiles
+shift:  ; increment scrolling region tiles 
         ldx #FONT_HEIGHT*40-1
 @scroll_shift:
         lda $0400+40*SCROLL_ROW,X
@@ -535,19 +605,26 @@ shift:  ; increment scrolling region tiles
         dex
         bpl @scroll_shift
 
+        ; signal to erase column that scrolled off
+        inc ERASE_CTR
+
+        ; signal to load more text
+        sec
+        lda TEXT_CTR
+        sbc #$08
+        sta TEXT_CTR
+
+
 noshift:
         ldx WIGGLE_INDEX
         lda FRAME_COUNT 
-        and #%11        ; update wiggle every 4th frame
+        and #%11        ; update vertical wiggle every 4th frame
         bne @skipwiggle 
         cpx #$00
         bne @dx
         ldx #14
 @dx:    dex
         stx WIGGLE_INDEX
-
-
-        inc TEXT_CTR
 
 @skipwiggle:
 
@@ -671,7 +748,10 @@ irq_y:  ldy #$00
         
 ;== TABLES ==
 
-sine_table:     ; sine table - range: [$00,$18]
+
+; sine table 
+; 128 entries - range: [$00,$18]
+sine_table:       
         .byte $00,$00,$00,$00,$00,$00,$01,$01
         .byte $01,$01,$01,$02,$02,$02,$03,$03
         .byte $04,$04,$04,$05,$05,$06,$06,$07
@@ -692,8 +772,40 @@ sine_table:     ; sine table - range: [$00,$18]
         .include "./font_map.inc"
 
 
-; scroll_text:
-;         .byte "yyyyyyyyy"
+;  scroll_text:
+;         .byte "aaabacadaeafagahaiajakalamanaoapaqarasatauavawaxayaza a-a,a.a;a'a&"
+;         .byte "babbbcbdbebfbgbhbibjbkblbmbnbobpbqbrbsbtbubvbwbxbybzb b-b,b.b;b'b&"
+;         .byte "cacbcccdcecfcgchcicjckclcmcncocpcqcrcsctcucvcwcxcyczc c-c,c.c;c'c&"
+;         .byte "dadbdcdddedfdgdhdidjdkdldmdndodpdqdrdsdtdudvdwdxdydzd d-d,d.d;d'd&"
+;         .byte "eaebecedeeefegeheiejekelemeneoepeqereseteuevewexeyeze e-e,e.e;e'e&"
+;         .byte "fafbfcfdfefffgfhfifjfkflfmfnfofpfqfrfsftfufvfwfxfyfzf f-f,f.f;f'f&"
+;         .byte "gagbgcgdgegfggghgigjgkglgmgngogpgqgrgsgtgugvgwgxgygzg g-g,g.g;g'g&"
+;         .byte "hahbhchdhehfhghhhihjhkhlhmhnhohphqhrhshthuhvhwhxhyhzh h-h,h.h;h'h&"
+;         .byte "iaibicidieifigihiiijikiliminioipiqirisitiuiviwixiyizi i-i,i.i;i'i&"
+;         .byte "jajbjcjdjejfjgjhjijjjkjljmjnjojpjqjrjsjtjujvjwjxjyjzj j-j,j.j;j'j&"
+;         .byte "kakbkckdkekfkgkhkikjkkklkmknkokpkqkrksktkukvkwkxkykzk k-k,k.k;k'k&"
+;         .byte "lalblcldlelflglhliljlklllmlnlolplqlrlsltlulvlwlxlylzl l-l,l.l;l'l&"
+;         .byte "mambmcmdmemfmgmhmimjmkmlmmmnmompmqmrmsmtmumvmwmxmymzm m-m,m.m;m'm&"
+;         .byte "nanbncndnenfngnhninjnknlnmnnnonpnqnrnsntnunvnwnxnynzn n-n,n.n;n'n&"
+;         .byte "oaobocodoeofogohoiojokolomonooopoqorosotouovowoxoyozo o-o,o.o;o'o&"
+;         .byte "papbpcpdpepfpgphpipjpkplpmpnpopppqprpsptpupvpwpxpypzp p-p,p.p;p'p&"
+;         .byte "qaqbqcqdqeqfqgqhqiqjqkqlqmqnqoqpqqqrqsqtquqvqwqxqyqzq q-q,q.q;q'q&"
+;         .byte "rarbrcrdrerfrgrhrirjrkrlrmrnrorprqrrrsrtrurvrwrxryrzr r-r,r.r;r'r&"
+;         .byte "sasbscsdsesfsgshsisjskslsmsnsospsqsrssstsusvswsxsyszs s-s,s.s;s's&"
+;         .byte "tatbtctdtetftgthtitjtktltmtntotptqtrtstttutvtwtxtytzt t-t,t.t;t't&"
+;         .byte "uaubucudueufuguhuiujukulumunuoupuqurusutuuuvuwuxuyuzu u-u,u.u;u'u&"
+;         .byte "vavbvcvdvevfvgvhvivjvkvlvmvnvovpvqvrvsvtvuvvvwvxvyvzv v-v,v.v;v'v&"
+;         .byte "wawbwcwdwewfwgwhwiwjwkwlwmwnwowpwqwrwswtwuwvwwwxwywzw w-w,w.w;w'w&"
+;         .byte "xaxbxcxdxexfxgxhxixjxkxlxmxnxoxpxqxrxsxtxuxvxwxxxyxzx x-x,x.x;x'x&"
+;         .byte "yaybycydyeyfygyhyiyjykylymynyoypyqyrysytyuyvywyxyyyzy y-y,y.y;y'y&"
+;         .byte "zazbzczdzezfzgzhzizjzkzlzmznzozpzqzrzsztzuzvzwzxzyzzz z-z,z.z;z'z&"
+;         .byte " a b c d e f g h i j k l m n o p q r s t u v w x y z   - , . ; ' &"
+;         .byte "-a-b-c-d-e-f-g-h-i-j-k-l-m-n-o-p-q-r-s-t-u-v-w-x-y-z- ---,-.-;-'-&"
+;         .byte ",a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z, ,-,,,.,;,',&"
+;         .byte ".a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p.q.r.s.t.u.v.w.x.y.z. .-.,...;.'.&"
+;         .byte ";a;b;c;d;e;f;g;h;i;j;k;l;m;n;o;p;q;r;s;t;u;v;w;x;y;z; ;-;,;.;;;';&"
+;         .byte "'a'b'c'd'e'f'g'h'i'j'k'l'm'n'o'p'q'r's't'u'v'w'x'y'z' '-','.';'''&"
+;         .byte "&a&b&c&d&e&f&g&h&i&j&k&l&m&n&o&p&q&r&s&t&u&v&w&x&y&z& &-&,&.&;&'&&"
 ;         .byte $FF
 
 scroll_text:
@@ -712,7 +824,8 @@ scroll_text:
         .byte "soon as i can. this is my substitute for "
         .byte "pistol & ball. with a philosophical "
         .byte "flourish cato throws himself upon his sword;"
-        .byte "i quietly take to the ship.     "
+        .byte " i quietly take to the ship.                "
+        .byte "           "
         .byte $FF
 
         .include "./font.inc"

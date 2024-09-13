@@ -19,103 +19,122 @@ def read_block(image, row, col):
     return block
 
 
-# what character is in each block
-charmap = "                                " + \
-          "abcdefghijklm nopqrs' tuvw x    " + \
-          "                                " + \
-          "                                " + \
-          "  yzþ@&ð- ,.;                   " + \
-          "                                " + \
-          "                                " + \
-          "                                "
-# what ascender is in each block
-asc_map = " b d   h  kl        '           " + \
-          "                                " + \
-          "                                " + \
-          "    þ@&ð    '                   " + \
-          "                                " + \
-          "                                " + \
-          "                                " + \
-          "                                "
-
-des_map = "                                " + \
-          "                                " + \
-          "     fg  j      pqr        x    " + \
-          "                                " + \
-          "                                " + \
-          "  y þ@&ð  , ;                   " + \
-          "                                " + \
-          "                                "
-
-widemap = "                                " + \
-          "             m            w     " + \
-          "                                " + \
-          "                                " + \
-          "                                " + \
-          "                                " + \
-          "                                " + \
-          "                                "
 
 _, filename, out_dir = sys.argv
-blocks = {}
-blank = 0xDF
+
+var_font_map = "abcdefghhijklmmnopqrstuvwwxyyyz --,.;'&"
+chars = {}
+char_widths = {}
+char_block_width = {}
+FONT_HEIGHT = 3
+
+
+labels = {
+    ' ': 'sp',
+    '-': 'ds',
+    ',': 'cm',
+    '.': 'pt',
+    ';': 'sc',
+    "'": 'ap',
+    '&': 'et',
+}
+
+
+kern_table = {
+    #      a   b  c  d  e   f  g  h  i  j   k   l  m  n  o  p  q  r  s  t  u  v  w  x   y  z     -  ,  .  ;  '  &
+    'a': [ 1, -1, 1, 1, 0, -1, 0,-1, 0, 0, -1, -1, 1, 0, 1, 0, 0, 0, 0, 0, 0,-1,-1, 0,-12, 0, 1, 1, 1, 1, 1, 1, 1],
+    'b': [ 0, -1, 1, 1, 0, -1, 0,-1, 0, 0, -1, -1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,-11, 0, 1, 1, 0, 1, 1, 1, 1],
+    'c': [ 0, -1, 1, 1, 0, -1, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'd': [ 0, -1, 1, 1, 1, -1, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0, 0, 1,-11, 1, 1, 1, 0, 1, 1, 1, 1],
+    'e': [ 1, -1, 1, 1, 1,  0, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0, 0, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'f': [ 1, -1, 1, 1, 0,  0, 1,-1, 1, 1, -1, -1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'g': [ 0, -1, 1, 1,-1, -1, 1,-1, 1, 1, -1, -1, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 0, 1],
+    'h': [ 0, -1, 1, 1, 1, -1, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0, 0, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'i': [ 1, -1, 1, 1, 0,  0, 1,-1, 1, 0, -1, -1, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'j': [ 1, -1, 1, 1, 1,  1, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'k': [ 1, -1, 1, 1, 0, -1, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'l': [ 1, -1, 1, 1, 0, -1, 1,-1, 0, 0, -1, -1, 1, 0, 1, 0, 1, 0, 0, 0, 0,-1,-1, 0,-12, 1, 1, 1, 1, 1, 1, 1, 1],
+    'm': [ 0, -1, 1, 1, 1, -1, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0, 0, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'n': [ 0, -1, 1, 1, 1, -1, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'o': [ 0, -1, 1, 1, 0,  0, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'p': [ 0, -1, 1, 1, 0, -1, 1,-1, 0, 0, -1, -1, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'q': [ 1, -1, 1, 1, 1,  0, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'r': [ 0, -1, 1, 1, 0, -1, 1,-1, 1, 1, -1, -1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 0, 0, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    's': [ 1, -1, 1, 1, 0,  0, 1,-1, 1, 1, -1, -1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    't': [ 0, -1, 1, 1, 1,  0, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'u': [ 0, -1, 1, 1, 0, -1, 1,-1, 0, 0, -1, -1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'v': [ 0, -1, 0, 0, 0,  0, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'w': [ 0, -1, 1, 1, 0, -1, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1,-1, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'x': [ 0, -1, 1, 1, 0, -1, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'y': [ 0, -1, 1, 1, 0, -1, 1,-1, 1, 1, -1, -1, 1, 1, 0, 0, 1, 1, 0, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    'z': [ 1, -1, 1, 1, 0, -1, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    ' ': [ 1, -1, 1, 1, 1, -1, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, -8, 1, 1, 1, 1, 1, 1, 1, 1],
+    '-': [ 1, -1, 1, 1, 1,  0, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    ',': [ 1, -1, 1, 1, 1, -1, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    '.': [ 1, -1, 1, 1, 1, -1, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    ';': [ 1, -1, 1, 1, 1, -1, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+    "'": [-2,  1,-3, 1,-3,  0, 0,-1, 0, 0,  1,  1,-2,-1,-2,-1,-3,-2,-3,-2,-1,-1,-1,-1,-12,-1, 1, 1, 1, 1, 1, 1, 1],
+    '&': [ 1, -1, 1, 1, 1,  0, 1,-1, 1, 1, -1, -1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1,-11, 1, 1, 1, 1, 1, 1, 1, 1],
+}
 
 print(f'reading {filename}')
 with open(filename, "rb") as file:
     image = imageio.imread(file)
-    for block_row in range(8):
-        for block_col in range(32):
-            code=block_row*32+block_col
-            blocks[code] = read_block(image, block_row, block_col)
+    for block_col,char in enumerate(var_font_map):
+        col = [read_block(image, block_row, block_col) for block_row in range(FONT_HEIGHT)]
+        chars.setdefault(char, []).append(col)
+
+def block_width(column):
+    flat_column = [row for block in column for row in block]
+    max_width = 0
+    for row in flat_column:
+        row_width = 8
+        for i in range(8):
+            if row & 1: break
+            row >>= 1
+            row_width -= 1
+        if row_width > max_width:
+            max_width = row_width
+    
+    if max_width == 0: return 7 # make sure space doesent break things
+    return max_width 
 
 
-with open(out_dir+"font_bin.bin", "wb") as ofile:
-    print(f"writing {ofile.name}")
-    for code in range(256):
-        if code in blocks:
-            ofile.write(bytes(blocks[code]))
-        else:
-            ofile.write(bytes([0]*8))
-
-with open(out_dir+"font_asc.bin", "wb") as ofile:
-    print(f"writing {ofile.name}")
-    for i, ch in enumerate(charmap):   
-        try:
-            if ch == ' ':
-                val = blank
-            else:
-                val = asc_map.index(ch)
-        except ValueError:
-            val = blank
-        ofile.write(bytes([val]))
-
-with open(out_dir+"font_des.bin", "wb") as ofile:
-    print(f"writing {ofile.name}")
-    for i, ch in enumerate(charmap):
-        try:
-            if ch == ' ':
-                val = blank
-            else:
-                val = des_map.index(ch)
-        except ValueError:
-            val = blank
-        ofile.write(bytes([val]))
+for char,v in chars.items():
+    char_widths[char] = (len(v) - 1) * 8 + block_width(v[-1])
+    char_block_width[char] = len(v)
 
 with open(out_dir+"font.inc", "w") as ofile:
     print(f"writing {ofile.name}")
     print(f'; autogenerated by {__file__} {datetime.datetime.now()}', file=ofile)
-    print('font_asc: .incbin "font_asc.bin"', file=ofile)
-    print('font_des: .incbin "font_des.bin"', file=ofile)
-    print('font: .incbin "font_bin.bin"', file=ofile)
+
+    for char,data in chars.items():
+        labels.setdefault(char, char)
+        print(f'font_{labels[char]}:', file=ofile)
+        for column in data:
+            print(f"\t.byte " + ', '.join(f"${b:02x}" for block in column for b in block), file=ofile)
+    print('font_hi:\n\t.byte ' + ', '.join(f">font_{labels[char]}" for char in chars.keys()), file=ofile)
+    print('font_lo:\n\t.byte ' + ', '.join(f"<font_{labels[char]}" for char in chars.keys()), file=ofile)
+
+    for char,data in kern_table.items():
+        print(f'kern_{labels[char]}:', file=ofile)
+        print(f'\t.byte '+', '.join(f"${(v + char_widths[char]) % 256:02x}" for v in data), file=ofile)
+    print('kern_hi:\n\t.byte ' + ', '.join(f">kern_{labels[char]}" for char in kern_table.keys()), file=ofile)
+    print('kern_lo:\n\t.byte ' + ', '.join(f"<kern_{labels[char]}" for char in kern_table.keys()), file=ofile)
+
+    #print('font_width:\n\t.byte ' + ', '.join(f"${w:02x}" for w in char_widths.values()), file=ofile)
+    print('font_columns:\n\t.byte ' + ', '.join(f"${c:02x}" for c in char_block_width.values()), file=ofile)
+
 
 
 with open(out_dir+"font_map.inc", "w", encoding="utf-8") as ofile:
     print(f"writing {ofile.name}")
-    print(
-        f'; autogenerated by {__file__} {datetime.datetime.now()}', file=ofile)    
-    for i, ch in enumerate(charmap):
-        if ch != ' ' or i == blank:
-            print(f".charmap ${ord(ch):02x}, ${i:02x} ; {ch}", file=ofile)
-
+    print(f'; autogenerated by {__file__} {datetime.datetime.now()}', file=ofile)    
+    for i, ch in enumerate(chars.keys()):
+        print(f".charmap ${ord(ch):02x}, ${i:02x} ; {ch}", file=ofile)
 
 time.sleep(2)
+
+
+for char in chars.keys():
+    print("\t.byte \"" + "".join(char + c for c in chars.keys()) + '"')

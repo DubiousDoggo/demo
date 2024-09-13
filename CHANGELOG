@@ -1,0 +1,31 @@
+
+ - Variable Width Font Engine
+
+    - Memory Constraints:
+        - 64KB total RAM
+        - minus zeropage, VIC, I/O, etc
+        - ~175 pages of free memory for code and data
+
+    - Tile Allocation:
+        - For a 40 column by 3 row scroller: 120 tiles
+        - Max of 256 tiles per tilemap
+        - possible for each tile to have its own tile
+        - wider area would need dynamic tile allocation - future project?
+
+    - Kerning:
+        - 26 letters ^2 for 676 letter pairs = ~3 pages of tables
+
+
+
+9/10/2024
+ - got the variable font width mostly working
+
+ - TODO:
+ - clear buffer before it wraps back around the other side of the screen
+ - iron out overflow bugs
+
+
+9/12/2024
+ - got it lookin SMOOTH AF
+ - kerning and wrapping bugs all ironed out
+ 

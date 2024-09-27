@@ -1,7 +1,6 @@
 VICE/
 videos/
 saves/
-cc65/
 C64Debugger/
 *.c
 *.zip

@@ -29,3 +29,7 @@
  - got it lookin SMOOTH AF
  - kerning and wrapping bugs all ironed out
  
+
+ 9/26/2024
+  - changed cc65 to be a submodule
+  

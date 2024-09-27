@@ -4,10 +4,10 @@
 ## FILES TO INSTALL
 These are not included in the repo and must be downloaded yourself:
  - C64Debugger
- - cc65
  - VICE
 The scripts expect each of these to be installed in a directory with that name.
-<!-- TODO: git module for this -->
+
+cc65 is included as a git submodule.
 
 ## BUILD
 ### The easy way

@@ -22,7 +22,7 @@ def read_block(image, row, col):
 
 _, filename, out_dir = sys.argv
 
-var_font_map = "abcdefghhijklmmnopqrstuvwwxyyyz --,.;'&*1233445667788990[]\""
+var_font_map = "abcdefghhijklmmnopqrstuvwwxyyyz --,.;'&*1234567890______[]\""
 chars = {}
 char_widths = {}
 char_block_width = {}

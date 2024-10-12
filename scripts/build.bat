@@ -8,7 +8,6 @@ py %~dp0\build_font.py %~dp0\..\fonts\var_font.png %~dp0\..\src\
     -C c64-asm.cfg ^
     -Ln "%out-dir%%~n1.lbl" ^
     -g ^
-    -u __EXEHDR__ ^
     %~f1 ^
     -o %out-dir%%~n1.prg ^
     -Wl "--mapfile,%out-dir%%~n1.map" ^

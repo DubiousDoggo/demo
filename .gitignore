@@ -2,7 +2,7 @@ VICE/
 videos/
 saves/
 C64Debugger/
-*.c
+/*.c
 *.zip
 bin/*
 fonts/*.psd

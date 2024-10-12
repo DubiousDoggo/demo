@@ -221,6 +221,7 @@ SCROLL_MAX      := $18  ; max value the scroll routine expects
 
 
 ; == MACROS ==
+
 .macro  irq_addr addr
         lda #<addr      ; set IRQ vector
         sta $FFFE
@@ -255,8 +256,8 @@ SCROLL_MAX      := $18  ; max value the scroll routine expects
 
 ; == ENTRY POINT ==
 
+.forceimport __EXEHDR__ ; BASIC stub
 
-init:
         sei             ; disable interrupts
 
         lda #$7F        ; disable CIA interrupts

@@ -1,8 +1,5 @@
     
- - set up makefile
-
  - TTF Engine
     - cc65 C code
  
-
  - switch to retrodebugger https://github.com/slajerek/RetroDebugger

@@ -12,7 +12,7 @@
 	.macpack	longbranch
 	.forceimport	__STARTUP__
 	.forceimport	initmainargs
-	.import		_printf
+	.import		_puts
 	.export		_main
 
 .segment	"RODATA"
@@ -32,9 +32,7 @@ S0001:
 
 	lda     #<(S0001)
 	ldx     #>(S0001)
-	jsr     pushax
-	ldy     #$02
-	jsr     _printf
+	jsr     _puts
 	ldx     #$00
 	txa
 	rts

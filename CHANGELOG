@@ -33,3 +33,5 @@
  9/26/2024
   - changed cc65 to be a submodule
   
+10/12/2024
+ - added MAKEFILE

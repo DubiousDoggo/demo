@@ -1,0 +1,14 @@
+
+.PHONY: clean
+
+CL65 := .\cc65\bin\cl65.exe
+PYTHON := py
+
+./bin/test1.prg ./bin/test1.lbl ./bin/test1.map ./bin/test1.dbg: ./src/test1.asm ./src/font.inc ./src/font_map.inc 
+	$(CL65) -t c64 -C c64-asm.cfg -g ./src/test1.asm -o ./bin/test1.prg -Ln "./bin/test1.lbl" -Wl "--mapfile,./bin/test1.map" -Wl "--dbgfile,./bin/test1.dbg"
+
+./src/font.inc ./src/font_map.inc: ./scripts/build_font.py ./fonts/var_font.png
+	$(PYTHON) ./scripts/build_font.py ./fonts/var_font.png ./src/
+
+clean:
+	rm -r ./bin

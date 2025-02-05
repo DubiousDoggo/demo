@@ -3,3 +3,6 @@
     - cc65 C code
  
  - switch to retrodebugger https://github.com/slajerek/RetroDebugger
+
+ - get VSC looking at the right include files
+ 

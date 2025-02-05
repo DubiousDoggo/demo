@@ -5,5 +5,7 @@ C64Debugger/
 /*.c
 *.zip
 bin/*
+src/*.o
+src/*.s
 fonts/*.psd
 fonts/*.act

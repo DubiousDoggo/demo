@@ -1,8 +1,30 @@
 
-.PHONY: clean
+.PHONY: all demo test1 clean
 
+all: demo test1
+
+CC := .\cc65\bin\cc65.exe
+CA := .\cc65\bin\ca65.exe
+LD := .\cc65\bin\ld65.exe
 CL65 := .\cc65\bin\cl65.exe
 PYTHON := py
+
+demo: ./bin/demo.prg
+
+./bin/demo.prg: ./src/demo.o ./src/test.o 
+	$(LD) -t c64 -o ./bin/demo.prg ./src/demo.o ./src/test.o c64.lib
+
+./src/test.o: ./src/test.asm
+	$(CA) -t c64 ./src/test.asm
+
+./src/demo.o: ./src/demo.s
+	$(CA) ./src/demo.s
+
+./src/demo.s: ./src/demo.c 
+	$(CC) -t c64 -g ./src/demo.c
+
+
+test1: ./bin/test1.prg
 
 ./bin/test1.prg ./bin/test1.lbl ./bin/test1.map ./bin/test1.dbg: ./src/test1.asm ./src/font.inc ./src/font_map.inc 
 	$(CL65) -t c64 -C c64-asm.cfg -g ./src/test1.asm -o ./bin/test1.prg -Ln "./bin/test1.lbl" -Wl "--mapfile,./bin/test1.map" -Wl "--dbgfile,./bin/test1.dbg"
@@ -11,4 +33,6 @@ PYTHON := py
 	$(PYTHON) ./scripts/build_font.py ./fonts/var_font.png ./src/
 
 clean:
-	rm -r ./bin
+	rm ./src/*.s
+	rm ./src/*.o
+	rm ./bin/*

@@ -1,42 +1,53 @@
+; ================================ ;
+; == COMMODORE 64 UNTITLED DEMO == ;
+; ==    JACK T FOX   2024-25    == ;
+; ================================ ;
 
-; == ZEROPAGE ==
+
+; ----------------------------
+; ==== ZEROPAGE VARIABLES ====
+; ----------------------------
+
 FRAME_COUNT     := $02
 
 WIDE_CHAR_BUF   := $03  ; buffer for wide characters in the scroller
 WIGGLE_INDEX    := $04
 
 IRQ_LINE        := $05
-SCROLL_Y        := $06          ; how many lines to stall in scrolled section
-SCROLL_STALL    := $07          ; counter for scroll stall
+SCROLL_Y        := $06  ; how many lines to stall in scrolled section
+SCROLL_STALL    := $07  ; counter for scroll stall
 SCROLLERX       := $08
-SCROLL_INDEX    := $09          ; index of scrolled text
+SCROLL_INDEX    := $09  ; index of scrolled text
 
-STALL_DONE      := $10  ; callback after stall routine
-STALL_DONE_LO   := $10
-STALL_DONE_HI   := $11
+STALL_CALLBACK    := $10  ; callback after stall routine
+STALL_CALLBACK_LO := $10
+STALL_CALLBACK_HI := $11
 
 PREV_CHAR       := $12  ; previous character in scroller
 
 TEMP2           := $13
 TEMP            := $14
 
-FNT_P           := $15
+FNT_P           := $15  ; font pointer
 FNT_P_LO        := $15
 FNT_P_HI        := $16
 
 FNT_P_TILE      := $17
 FNT_P_SHIFT     := $18
 
-COL_PTR         := $20
+COL_PTR         := $20  ; column pointer
 COL_PTR_LO      := $20
 COL_PTR_HI      := $21
 
-TEXT_CTR        := $22
-ERASE_CTR       := $23
+TEXT_CTR        := $22  ; text counter
+ERASE_CTR       := $23  ; erase counter
 
 COL_BUF       := $0200
 
-; == VIC-II ==1
+; --------------------------
+; ==== VIC-II ADDRESSES ====
+; --------------------------
+
 ; https://www.zimmers.net/cbmpics/cbm/c64/vic-ii.txt
 
 VIC_SPR0_X      := $D000        ; sprite X and Y positions
@@ -113,7 +124,9 @@ VIC_SPR5_COLOR  := $D02C
 VIC_SPR6_COLOR  := $D02D
 VIC_SPR7_COLOR  := $D02E
 
-; == SID - SOUND INTERFACE DEVICE ==
+; ------------------------------------------------
+; ==== SID - SOUND INTERFACE DEVICE ADDRESSES ====
+; ------------------------------------------------
 
 SID1_FLO        := $D400        ; Voice 1 frequency lo byte 
 SID1_FHI        := $D401        ; Voice 1 frequency hi byte
@@ -171,7 +184,9 @@ SID_PADDLEY     := $D41A        ; Y value of paddle
 SID3_OSC_READ   := $D41B        ; Voice 3 read oscillator
 SID3_ENV_READ   := $D41C        ; Voice 3 read envelope
 
-; == CIA - COMPLEX INTERFACE ADAPTER ==
+; ---------------------------------------------------
+; ==== CIA - COMPLEX INTERFACE ADAPTER ADDRESSES ====
+; ---------------------------------------------------
 
 CIA1_PRA        := $DC00        ; Port A
 CIA1_PRB        := $DC01        ; Port B
@@ -203,8 +218,10 @@ CIA2_ICR        := $DD0D
 CIA2_CRA        := $DD0E
 CIA2_CRB        := $DD0F
 
+; -------------------
+; ==== CONSTANTS ====
+; -------------------
 
-; == CONSTANTS ==
 TOP_SCROLL      := $03  ; scroll value to use for the top 3rd of the screen
 SCROLL_ROW      := 9    ; text row to start scroller at
 FONT_HEIGHT     := $03  ; number of rows in scroller    
@@ -219,22 +236,26 @@ SCROLL_START    := (SCROLL_ROW+6)*8+TOP_SCROLL-1
 SCROLL_MAX      := $18  ; max value the scroll routine expects
                         ; total lines the scroll takes is FONT_HEIGHT*8+SCROLL_MAX
 
+; ----------------
+; ==== MACROS ====
+; ----------------
 
-; == MACROS ==
-
+; set the IRQ vector
 .macro  irq_addr addr
-        lda #<addr      ; set IRQ vector
+        lda #<addr      
         sta $FFFE
         lda #>addr
         sta $FFFF
 .endmacro
+
+; set the IRQ line
 .macro  irq_line line   ; TODO: this wastes cycles
         lda line        ; interrupt on line
         sta VIC_RASTER  ; set IRQ line
         asl VIC_IRR     ; ack IRQ 
 .endmacro
 
-; 16 bit increment operand
+; 16 bit increment operand p
 .macro  i16 p         
         inc p+1
         bne :+
@@ -249,18 +270,22 @@ SCROLL_MAX      := $18  ; max value the scroll routine expects
         sty irq_y+1
 .endmacro
 
-; create label inside repeat block
+; create a label inside a repeat block
 .macro makeident lname, count
     .ident(.concat(lname,.sprintf("%d", count))):
 .endmacro
 
-; == ENTRY POINT ==
+; -----------------------------
+; ==== PROGRAM ENTRY POINT ====
+; -----------------------------
+
 .ifndef _main
 .forceimport __EXEHDR__ ; BASIC stub
 .endif
 
-_entry:
-.export _entry
+_scroller_init:
+.export _scroller_init
+
         sei             ; disable interrupts
 
         lda #$7F        ; disable CIA interrupts
@@ -287,23 +312,6 @@ _entry:
         inx
         bne @zp
 
-
-;         lda #%001       ; unmap BASIC and KERNAL, CHAR ROM enabled
-;         sta $01
-;         ldy #$08
-; @chr_cpy:
-;         ldx #$00         ; copy character rom into $2000
-; @chr_c: lda $D000,X
-; @chr_s: sta $2000,X
-;         inx
-;         bne @chr_c
-;         inc @chr_c+2
-;         inc @chr_s+2
-;         dey
-;         bne @chr_cpy
-;         lda #%101       ; unmap BASIC and KERNAL, I/O enabled 
-;         sta $01
-
         ; clear character page
         ldy #$08
 @chr_clr:
@@ -315,25 +323,11 @@ _entry:
         dey
         bne @chr_clr
 
-
         ;  select custom character set
         lda VIC_VIDEO_ADR
         and #%11110000
         ora #%00001000
         sta VIC_VIDEO_ADR
-
-
-        ; print hello world message
-;         ldy #41
-; @again: ldx #$00
-; @loop:  lda hello,X
-;         beq @done 
-; @base:  sta $0400
-;         i16 @base
-;         inx
-;         jmp @loop
-; @done:  dey
-;         bne @again
 
         ; clear screen
         lda #$ff
@@ -345,7 +339,6 @@ _entry:
         bne @base
 @done:  dey
         bne @again
-
 
         ; print scroller pattern
         ldy #39
@@ -372,18 +365,28 @@ _entry:
         lda #$00
         sta ERASE_CTR
 
-
         irq_addr irq1   ; set up IRQ chain
         irq_line #$00 
         cli             ; enable interrupts
 
-spin:   lda TEXT_CTR    ; wait for signal to load more text
-        bpl @clear
-        jsr load_text
+.ifdef _main
+spin:   rts
+_scroller_spin:
+.export _scroller_spin
+.else
+spin:
+.endif   
 
-@clear: lda ERASE_CTR
-        beq spin
-        dec ERASE_CTR
+        lda TEXT_CTR    ; spin and wait for signals
+        bpl @clear      ; if the text counter is negative,
+        jsr load_text   ; load more text until its positive
+@clear: lda ERASE_CTR 
+        beq spin        ; if the erase counter is positive, 
+                        ; erase columns until its zero
+
+erase_text:
+        ; decrement the erase counter
+        dec ERASE_CTR 
 
         ; erase the column that scrolled off
         lda #$00
@@ -392,7 +395,7 @@ spin:   lda TEXT_CTR    ; wait for signal to load more text
         dex
         bpl @erase
         
-        ; inc erase pointer
+        ; increment the erase pointer
         clc
         lda @erase+1
         adc #COL_HEIGHT
@@ -413,12 +416,16 @@ spin:   lda TEXT_CTR    ; wait for signal to load more text
 :
         jmp spin
 
+
+; the meat and potatos
 load_text:
-        jsr load_char
+        jsr load_char   ; the potatos
         tay
-        jsr place_char
+        jsr place_char  ; and the meat
         rts
 
+
+; load the next character from scroll_text into A
 load_char:
 @p_scr: lda scroll_text         ; load the next character 
         cmp #$FF
@@ -433,30 +440,33 @@ load_char:
         jmp load_char
 
 
-place_char:   ; write the character in Y to the screen
-              ; FNT_P is the pixel column of PREV_CHAR 
+; write the character in Y to the screen
+; FNT_P is the pixel column of PREV_CHAR 
+place_char:
 
-        lda font_lo,Y     ; set up character data pointer
+        ; set up character data pointer
+        lda font_lo,Y   ; cdp = font[Y]
         sta @cdp+1
         lda font_hi,Y
         sta @cdp+2
 
-        lda #$00
-        ldx #COL_HEIGHT-1 ; clear col buf
+        ; clear column buffer
+        lda #$00        
+        ldx #COL_HEIGHT-1 
 :       sta COL_BUF,X
         dex
         bpl :-
 
         ; calculate kerning
-        ; fnt_p += kern[prev_char][y]
-        clc
+        
+        clc             ; FNT_P += kern[PREV_CHAR][Y]
         ldx PREV_CHAR  
         lda kern_lo,X
         sta @kern+1
         lda kern_hi,X
         sta @kern+2     
-@kern:  lda $FFFF,Y   ; A = kern[prev_char][y]
-        sta TEMP
+@kern:  lda $FFFF,Y     
+        sta TEMP        
         bmi @neg
         adc FNT_P_LO
         sta FNT_P_LO
@@ -469,12 +479,12 @@ place_char:   ; write the character in Y to the screen
         dec FNT_P_HI
 @kd:    sty PREV_CHAR
 
-        clc
+        clc             ; TEXT_CTR += kern[PREV_CHAR][Y]
         lda TEXT_CTR
         adc TEMP
         sta TEXT_CTR
 
-        lda FNT_P_HI    ; fnt_p %= 8*COL_ROLLOVER
+        lda FNT_P_HI    ; FNT_P %= 8 * COL_ROLLOVER
         cmp #>(COL_ROLLOVER*8)
         bcc @noroll
         lda FNT_P_LO
@@ -493,7 +503,7 @@ place_char:   ; write the character in Y to the screen
         and #%00000111
         sta FNT_P_SHIFT
 
-        lda FNT_P_LO   ; col_ptr = (fnt_p & ~%111) * 3
+        lda FNT_P_LO   ; COL_PTR = (FNT_P & ~%111) * 3
         and #%11111000
         sta COL_PTR_LO
         lda FNT_P_HI     
@@ -511,7 +521,7 @@ place_char:   ; write the character in Y to the screen
         adc COL_PTR_HI
         sta COL_PTR_HI
         
-        lda COL_PTR_HI  ; col_ptr |= $2000 (start of char page)
+        lda COL_PTR_HI  ; COL_PTR |= $2000 (start of char page)
         ora #$20
         sta COL_PTR_HI
 
@@ -586,7 +596,9 @@ place_char:   ; write the character in Y to the screen
         rts
 
 
-        ; == IRQ ==
+; -----------------
+; ====== IRQ ======
+; -----------------
 
 irq1:   irq_start   
 
@@ -619,7 +631,6 @@ shift:  ; increment scrolling region tiles
         sbc #$08
         sta TEXT_CTR
 
-
 noshift:
         ldx WIGGLE_INDEX
         lda FRAME_COUNT 
@@ -632,7 +643,6 @@ noshift:
         stx WIGGLE_INDEX
 
 @skipwiggle:
-
         lda FRAME_COUNT
         and #%01111111
         tax
@@ -650,11 +660,10 @@ noshift:
         ora #%00000000  ; set MCM
         sta VIC_CTRL2
 
-
-        lda #<irq_stall_done_1  ; set callback
-        sta STALL_DONE_LO
-        lda #>irq_stall_done_1
-        sta STALL_DONE_HI
+        lda #<stall_callback_1  ; set callback
+        sta STALL_CALLBACK_LO
+        lda #>stall_callback_1
+        sta STALL_CALLBACK_HI
 
         lda #SCROLL_START       ; IRQ one line before badline, line 7 of row
         sta IRQ_LINE
@@ -663,11 +672,12 @@ noshift:
         asl VIC_IRR     ; ack IRQ 
         jmp irq_done
 
-
-        ; IRQ STALL
-        ; ASSUMES:
-        ;       SCROLL_STALL is the number of lines to stall
-        ;       IRQ_LINE is set, and is the line before the next badline
+; 
+; IRQ STALL TECHNIQUE
+;       stalls rendering by a given number of scanlines
+;       
+; ASSUMES:      SCROLL_STALL is the number of lines to stall
+;               IRQ_LINE is set, and is the line before the next badline
 irq_stall:
         irq_start
 
@@ -702,9 +712,10 @@ irq_stall:
         ora #%00001000  ; re-set RSEL
         sta VIC_CTRL1
 
-        jmp (STALL_DONE)
+        jmp (STALL_CALLBACK)
 
-irq_stall_done_1:       ; called at beginning of scroller
+; first IRQ stall callback
+stall_callback_1:       ; called at beginning of scroller
 
         lda VIC_CTRL2
         and #%11101000 ; clear MCM
@@ -712,10 +723,10 @@ irq_stall_done_1:       ; called at beginning of scroller
         eor #%00000111
         sta VIC_CTRL2
 
-        lda #<irq_stall_done_2  ; set callback
-        sta STALL_DONE_LO
-        lda #>irq_stall_done_2
-        sta STALL_DONE_HI
+        lda #<stall_callback_2  ; set callback to the next one in sequence
+        sta STALL_CALLBACK_LO
+        lda #>stall_callback_2
+        sta STALL_CALLBACK_HI
 
         ; set next IRQ to one line before badline after scrolled rows
         lda IRQ_LINE    ;
@@ -734,8 +745,8 @@ irq_stall_done_1:       ; called at beginning of scroller
         asl VIC_IRR     ; ack IRQ 
         jmp irq_done        
 
-
-irq_stall_done_2:       ; called at end of scroller
+; second IRQ stall callback
+stall_callback_2:       ; called at end of scroller
         
         ; stop scroll horizontal
         lda VIC_CTRL2
@@ -750,10 +761,12 @@ irq_a:  lda #$00        ; restore registers and return
 irq_x:  ldx #$00
 irq_y:  ldy #$00
         rti
-        
-;== TABLES ==
 
-   .include "./font.inc"
+; ----------------
+; ==== TABLES ====
+; ----------------
+
+        .include "./font.inc"
 
 ; sine table 
 ; 128 entries - range: [$00,$18]
@@ -775,8 +788,8 @@ sine_table:
         .byte $04,$03,$03,$02,$02,$02,$01,$01
         .byte $01,$01,$01,$00,$00,$00,$00,$00
 
-        .include "./font_map.inc"
 
+        .include "./font_map.inc"
 
 ;  scroll_text:
 ;         .byte "aaabacadaeafagahaiajakalamanaoapaqarasatauavawaxayaza a-a,a.a;a'a&"

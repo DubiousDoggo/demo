@@ -35,3 +35,9 @@
   
 10/12/2024
  - added MAKEFILE
+
+2/4/2025
+ - got C pipeline set up 
+
+ 11/15/25
+ - Call into scroller from C proof of concept

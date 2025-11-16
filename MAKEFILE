@@ -1,7 +1,7 @@
 
-.PHONY: all demo test1 clean
+.PHONY: all demo demo1 test1 clean
 
-all: demo test1
+all: demo demo1 test1
 
 CC := .\cc65\bin\cc65.exe
 CA := .\cc65\bin\ca65.exe
@@ -9,6 +9,8 @@ LD := .\cc65\bin\ld65.exe
 CL65 := .\cc65\bin\cl65.exe
 PYTHON := py
 
+
+# C based build
 demo: ./bin/demo.prg
 
 ./bin/demo.prg: ./src/demo.o ./src/test.o 
@@ -24,6 +26,23 @@ demo: ./bin/demo.prg
 	$(CC) -t c64 -g ./src/demo.c
 
 
+# C based build the scroller
+demo1: ./bin/demo1.prg
+
+./bin/demo1.prg: ./src/demo1.o ./src/test1.o 
+	$(LD) -t c64 -o ./bin/demo1.prg ./src/demo1.o ./src/test1.o c64.lib
+
+./src/test1.o: ./src/test1.asm
+	$(CA) -t c64 -D _main ./src/test1.asm
+
+./src/demo1.o: ./src/demo1.s
+	$(CA) ./src/demo1.s
+
+./src/demo1.s: ./src/demo1.c 
+	$(CC) -t c64 -g ./src/demo1.c
+
+
+# assemble the scroller
 test1: ./bin/test1.prg
 
 ./bin/test1.prg ./bin/test1.lbl ./bin/test1.map ./bin/test1.dbg: ./src/test1.asm ./src/font.inc ./src/font_map.inc 
